@@ -278,3 +278,91 @@ class TDSConvEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
+
+class TDSRNNEncoder(nn.Module):
+    """A time depth-separable recurrent encoder composing a sequence
+    of `TDSRNNBlock` and `TDSFullyConnectedBlock`.
+
+    Args:
+        num_features (int): ``num_features`` for an input of shape
+            (T, N, num_features).
+        block_channels (list): A list of integers indicating the number
+            of channels per `TDSRNNBlock`.
+        hidden_size (int): The hidden size of the RNN.
+        rnn_type (str): Type of RNN ('lstm' or 'gru').
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        block_channels: Sequence[int] = (24, 24, 24, 24),
+        hidden_size: int = 128,
+        rnn_type: str = "lstm",
+    ) -> None:
+        super().__init__()
+
+        assert len(block_channels) > 0
+        tds_rnn_blocks: list[nn.Module] = []
+        for channels in block_channels:
+            assert (
+                num_features % channels == 0
+            ), "block_channels must evenly divide num_features"
+            tds_rnn_blocks.extend(
+                [
+                    TDSRNNBlock(channels, num_features // channels, hidden_size, rnn_type, num_features),
+                    TDSFullyConnectedBlock(num_features),
+                ]
+            )
+        self.tds_rnn_blocks = nn.Sequential(*tds_rnn_blocks)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.tds_rnn_blocks(inputs)  # (T, N, num_features)
+
+
+class TDSRNNBlock(nn.Module):
+    """A temporal RNN block for sequence-to-sequence tasks.
+
+    Args:
+        input_size (int): Number of input features per time step.
+        hidden_size (int): Number of RNN units (hidden size).
+        num_layers (int): Number of layers in the RNN.
+        bidirectional (bool): Whether to use a bidirectional RNN.
+        dropout (float): Dropout rate.
+    """
+
+    def __init__(self, channels: int, width: int, hidden_size: int, rnn_type: str, num_features: int) -> None:
+        super().__init__()
+        self.channels = channels
+        self.width = width
+        self.hidden_size = hidden_size
+        self.rnn_type = rnn_type
+        
+        # Define the RNN type
+        if rnn_type == "lstm":
+            self.rnn = nn.LSTM(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+        else:
+            self.rnn = nn.GRU(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+        
+        # Linear layer for projection if necessary to match the input size for skip connection
+        self.projection = nn.Linear(hidden_size, num_features)
+        
+        # self.layer_norm = nn.LayerNorm(hidden_size)  # LayerNorm over hidden_size
+        self.layer_norm = nn.LayerNorm(num_features)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        T, N, C = inputs.shape  # (T, N, num_features)
+
+        # Pass through the RNN
+        x, _ = self.rnn(inputs)
+
+        # Optionally add skip connection after RNN processing
+        T_out = x.shape[0]
+        # Project the output of the RNN to match the feature dimension of the input for skip connection
+        x = self.projection(x)
+        # Ensure the skip connection has the same dimensionality
+        x = x + inputs[-T_out:]
+
+        # Apply LayerNorm
+        x = self.layer_norm(x)
+
+        return x  # (T, N, hidden_size)
