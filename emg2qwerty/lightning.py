@@ -179,7 +179,7 @@ class TDSConvCTCModule(pl.LightningModule):
                 num_features=num_features,
                 block_channels=block_channels,
                 hidden_size = 128,
-                rnn_type = "lstm",
+                rnn_type = "rnn",
             ),
             # (T, N, num_classes)
             nn.Linear(num_features, charset().num_classes),

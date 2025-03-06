@@ -337,13 +337,16 @@ class TDSRNNBlock(nn.Module):
         self.hidden_size = hidden_size
         self.rnn_type = rnn_type
         
-        # Define the RNN type
-        if rnn_type == "lstm":
+        if rnn_type.lower() == "rnn":
+            self.rnn = nn.RNN(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+        elif rnn_type.lower() == "lstm":
             self.rnn = nn.LSTM(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
-        else:
+        elif rnn_type.lower() == "gru":
             self.rnn = nn.GRU(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+        else:
+            raise ValueError("Unsupported RNN type. Choose either 'lstm' or 'gru'.")
         
-        # Linear layer for projection if necessary to match the input size for skip connection
+        # Linear layer for projection to match the input size for skip connection
         self.projection = nn.Linear(hidden_size, num_features)
         
         # self.layer_norm = nn.LayerNorm(hidden_size)  # LayerNorm over hidden_size
