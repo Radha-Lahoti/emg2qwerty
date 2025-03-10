@@ -297,6 +297,7 @@ class TDSRNNEncoder(nn.Module):
         num_features: int,
         block_channels: Sequence[int] = (24, 24, 24, 24),
         hidden_size: int = 128,
+        num_layers: int = 1,
         rnn_type: str = "lstm",
     ) -> None:
         super().__init__()
@@ -309,7 +310,7 @@ class TDSRNNEncoder(nn.Module):
             ), "block_channels must evenly divide num_features"
             tds_rnn_blocks.extend(
                 [
-                    TDSRNNBlock(channels, num_features // channels, hidden_size, rnn_type, num_features),
+                    TDSRNNBlock(channels, num_features // channels, hidden_size, num_layers, rnn_type, num_features),
                     TDSFullyConnectedBlock(num_features),
                 ]
             )
@@ -330,26 +331,26 @@ class TDSRNNBlock(nn.Module):
         dropout (float): Dropout rate.
     """
 
-    def __init__(self, channels: int, width: int, hidden_size: int, rnn_type: str, num_features: int) -> None:
+    def __init__(self, channels: int, width: int, hidden_size: int, num_layers: int, rnn_type: str, num_features: int) -> None:
         super().__init__()
         self.channels = channels
         self.width = width
         self.hidden_size = hidden_size
         self.rnn_type = rnn_type
+        self.num_layers = num_layers
         
         if rnn_type.lower() == "rnn":
-            self.rnn = nn.RNN(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+            self.rnn = nn.RNN(input_size=channels * width, hidden_size=hidden_size, num_layers = num_layers, batch_first=False)
         elif rnn_type.lower() == "lstm":
-            self.rnn = nn.LSTM(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+            self.rnn = nn.LSTM(input_size=channels * width, hidden_size=hidden_size, num_layers = num_layers, batch_first=False)
         elif rnn_type.lower() == "gru":
-            self.rnn = nn.GRU(input_size=channels * width, hidden_size=hidden_size, batch_first=False)
+            self.rnn = nn.GRU(input_size=channels * width, hidden_size=hidden_size, num_layers = num_layers, batch_first=False)
         else:
             raise ValueError("Unsupported RNN type. Choose either 'lstm' or 'gru'.")
         
-        # Linear layer for projection to match the input size for skip connection
+        # Linear layer to go from hidden_size to num_features, to match the input size for skip connection
         self.projection = nn.Linear(hidden_size, num_features)
         
-        # self.layer_norm = nn.LayerNorm(hidden_size)  # LayerNorm over hidden_size
         self.layer_norm = nn.LayerNorm(num_features)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -358,14 +359,74 @@ class TDSRNNBlock(nn.Module):
         # Pass through the RNN
         x, _ = self.rnn(inputs)
 
-        # Optionally add skip connection after RNN processing
-        T_out = x.shape[0]
-        # Project the output of the RNN to match the feature dimension of the input for skip connection
+        # Project the output of the RNN to match the input's feature dimension for skip connection
         x = self.projection(x)
-        # Ensure the skip connection has the same dimensionality
-        x = x + inputs[-T_out:]
+
+        # Skip connection
+        T_out = x.shape[0]
+        x = x + inputs[-T_out:] # Ensure the skip connection has the same dimensionality
 
         # Apply LayerNorm
         x = self.layer_norm(x)
 
-        return x  # (T, N, hidden_size)
+        return x  # (T, N, num_features)
+    
+class TDSConvRNN(nn.Module):
+    """A hybrid encoder combining a sequence of `TDSConv2dBlock` and `TDSRNNBlock`,
+    followed by `TDSFullyConnectedBlock`.
+
+    Args:
+        num_features (int): Number of input features per time step.
+        conv_block_channels (list): List of integers indicating the number of channels per `TDSConv2dBlock`.
+        kernel_width (int): The kernel size of the temporal convolutions.
+        rnn_hidden_size (int): Hidden size of the RNN.
+        rnn_num_layers (int): Number of layers in the RNN.
+        rnn_type (str): Type of RNN ('lstm' or 'gru').
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        conv_block_channels: Sequence[int] = (24, 24, 24),
+        kernel_width: int = 32,
+        rnn_hidden_size: int = 128,
+        rnn_num_layers: int = 1,
+        rnn_type: str = "lstm",
+    ) -> None:
+        super().__init__()
+
+        assert len(conv_block_channels) > 0, "conv_block_channels must not be empty."
+
+        # Convolutional Blocks
+        conv_blocks: list[nn.Module] = []
+        for channels in conv_block_channels:
+            assert (
+                num_features % channels == 0
+            ), "block_channels must evenly divide num_features"
+            conv_blocks.extend(
+                [
+                    TDSConv2dBlock(channels, num_features // channels, kernel_width),
+                    TDSFullyConnectedBlock(num_features),
+                ]
+            )
+        self.conv_layers = nn.Sequential(*conv_blocks)
+
+        # Recurrent Layers
+        self.rnn_block = TDSRNNBlock(
+            channels=conv_block_channels[-1],  # Last conv block output channels
+            width=num_features // conv_block_channels[-1],
+            hidden_size=rnn_hidden_size,
+            num_layers=rnn_num_layers,
+            rnn_type=rnn_type,
+            num_features=num_features,
+        )
+
+        # Fully Connected Block
+        self.fc_block = TDSFullyConnectedBlock(num_features)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        x = self.conv_layers(inputs)  # Apply convolutional layers
+        x = self.rnn_block(x)  # Apply RNN layers
+        x = self.fc_block(x)  # Fully connected block for output transformation
+        return x  # Output shape (T, N, num_features)
+
