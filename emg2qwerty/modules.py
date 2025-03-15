@@ -280,8 +280,7 @@ class TDSConvEncoder(nn.Module):
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
 
 class TDSRNNEncoder(nn.Module):
-    """A time depth-separable recurrent encoder composing a sequence
-    of `TDSRNNBlock` and `TDSFullyConnectedBlock`.
+    """A RNN encoder composing a sequence of `TDSRNNBlock` and `TDSFullyConnectedBlock`.
 
     Args:
         num_features (int): ``num_features`` for an input of shape
@@ -289,7 +288,7 @@ class TDSRNNEncoder(nn.Module):
         block_channels (list): A list of integers indicating the number
             of channels per `TDSRNNBlock`.
         hidden_size (int): The hidden size of the RNN.
-        rnn_type (str): Type of RNN ('lstm' or 'gru').
+        rnn_type (str): Type of RNN ('rnn' or 'lstm' or 'gru').
     """
 
     def __init__(
@@ -321,14 +320,12 @@ class TDSRNNEncoder(nn.Module):
 
 
 class TDSRNNBlock(nn.Module):
-    """A temporal RNN block for sequence-to-sequence tasks.
+    """A temporal RNN block.
 
     Args:
         input_size (int): Number of input features per time step.
         hidden_size (int): Number of RNN units (hidden size).
         num_layers (int): Number of layers in the RNN.
-        bidirectional (bool): Whether to use a bidirectional RNN.
-        dropout (float): Dropout rate.
     """
 
     def __init__(self, channels: int, width: int, hidden_size: int, num_layers: int, rnn_type: str, num_features: int) -> None:
@@ -346,7 +343,7 @@ class TDSRNNBlock(nn.Module):
         elif rnn_type.lower() == "gru":
             self.rnn = nn.GRU(input_size=channels * width, hidden_size=hidden_size, num_layers = num_layers, batch_first=False)
         else:
-            raise ValueError("Unsupported RNN type. Choose either 'lstm' or 'gru'.")
+            raise ValueError("Unsupported RNN type. Choose either 'lstm' or 'gru' or 'rnn'.")
         
         # Linear layer to go from hidden_size to num_features, to match the input size for skip connection
         self.projection = nn.Linear(hidden_size, num_features)
@@ -381,7 +378,7 @@ class TDSConvRNN(nn.Module):
         kernel_width (int): The kernel size of the temporal convolutions.
         rnn_hidden_size (int): Hidden size of the RNN.
         rnn_num_layers (int): Number of layers in the RNN.
-        rnn_type (str): Type of RNN ('lstm' or 'gru').
+        rnn_type (str): Type of RNN ('lstm' or 'gru' or 'rnn').
     """
 
     def __init__(
@@ -427,6 +424,6 @@ class TDSConvRNN(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         x = self.conv_layers(inputs)  # Apply convolutional layers
         x = self.rnn_block(x)  # Apply RNN layers
-        x = self.fc_block(x)  # Fully connected block for output transformation
+        x = self.fc_block(x)  # Fully connected block
         return x  # Output shape (T, N, num_features)
 

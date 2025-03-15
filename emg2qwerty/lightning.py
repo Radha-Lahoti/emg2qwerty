@@ -180,7 +180,7 @@ class TDSConvCTCModule(pl.LightningModule):
             #     num_features=num_features,
             #     block_channels=block_channels,
             #     hidden_size = 128,
-            #     num_layers = 1,
+            #     num_layers = 4,
             #     rnn_type = "gru",
             # ),
             TDSConvRNN(
